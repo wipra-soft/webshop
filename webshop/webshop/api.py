@@ -11,6 +11,34 @@ from webshop.webshop.product_data_engine.filters import ProductFiltersBuilder
 from webshop.webshop.product_data_engine.query import ProductQuery
 from webshop.webshop.doctype.override_doctype.item_group import get_child_groups_for_website
 
+def run_product_filter_data_before_hooks(query_args):
+    """Run hooks that may update product listing query arguments.
+
+    Hooks can return updated query_args. Returning None keeps the
+    current value unchanged.
+    """
+    for hook in frappe.get_hooks("webshop_product_filter_data_before"):
+        updated_query_args = frappe.get_attr(hook)(query_args=query_args)
+
+        if updated_query_args is not None:
+            query_args = frappe._dict(updated_query_args)
+
+    return query_args
+
+
+def run_product_filter_data_after_hooks(result, query_args):
+    """Run hooks that may update the product listing response.
+
+    Hooks can return an updated response. Returning None keeps the
+    current value unchanged.
+    """
+    for hook in frappe.get_hooks("webshop_product_filter_data_after"):
+        updated_result = frappe.get_attr(hook)(result=result, query_args=query_args)
+
+        if updated_result is not None:
+            result = updated_result
+
+    return result
 
 @frappe.whitelist(allow_guest=True)
 def get_product_filter_data(query_args=None):
@@ -32,6 +60,9 @@ def get_product_filter_data(query_args=None):
 		query_args = json.loads(query_args)
 
 	query_args = frappe._dict(query_args or {})
+
+    # Let apps adjust filters or search terms before products are fetched.
+    query_args = run_product_filter_data_before_hooks(query_args)
 
 	if query_args:
 		search = query_args.get("search")
@@ -75,13 +106,19 @@ def get_product_filter_data(query_args=None):
 		filter_engine = ProductFiltersBuilder()
 		filters["discount_filters"] = filter_engine.get_discount_filters(discounts)
 
-	return {
-		"items": result["items"] or [],
-		"filters": filters,
-		"settings": engine.settings,
-		"sub_categories": sub_categories,
-		"items_count": result["items_count"],
-	}
+    response = {
+        "items": result["items"] or [],
+        "filters": filters,
+        "settings": engine.settings,
+        "sub_categories": sub_categories,
+        "items_count": result["items_count"],
+    }
+
+    # Let apps enrich the product listing response before it is returned.
+    return run_product_filter_data_after_hooks(
+        result=response,
+        query_args=query_args,
+    )
 
 
 @frappe.whitelist(allow_guest=True)
